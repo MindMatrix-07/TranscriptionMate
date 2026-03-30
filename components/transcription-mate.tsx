@@ -4,17 +4,21 @@ import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
+  BadgeAlert,
   BookOpenText,
   CircleAlert,
   Check,
   Copy,
   FileText,
+  ShieldAlert,
   MoonStar,
+  SearchCheck,
   Sparkles,
   SunMedium,
   WandSparkles,
 } from "lucide-react";
 import { sanitizeLyrics } from "@/lib/sanitize-lyrics";
+import { detectSource, type SourceReport } from "@/lib/source-detector";
 
 type Theme = "light" | "dark";
 
@@ -86,6 +90,7 @@ async function copyText(value: string) {
 export function TranscriptionMate() {
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
+  const [sourceReport, setSourceReport] = useState<SourceReport | null>(null);
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
@@ -121,6 +126,12 @@ export function TranscriptionMate() {
   const inputStats = getStats(input);
   const outputStats = getStats(output);
   const activeGuideStep = guideSteps[guideStep];
+  const suspicionTone =
+    sourceReport?.suspicion === "high"
+      ? "text-rose-400 bg-rose-500/15"
+      : sourceReport?.suspicion === "medium"
+        ? "text-amber-400 bg-amber-500/15"
+        : "text-emerald-400 bg-emerald-500/15";
 
   const handleClean = () => {
     const sanitized = sanitizeLyrics(input);
@@ -154,9 +165,24 @@ export function TranscriptionMate() {
     }
   };
 
+  const handleSourceCheck = () => {
+    const report = detectSource(input);
+    setSourceReport(report);
+    setToast({
+      message:
+        report.suspicion === "high"
+          ? "Strong source clues detected."
+          : report.suspicion === "medium"
+            ? "Possible source clues detected."
+            : "Source check completed.",
+      tone: report.suspicion === "high" ? "error" : "success",
+    });
+  };
+
   const handleLoadExample = () => {
     setInput(demoLyrics);
     setOutput("");
+    setSourceReport(detectSource(demoLyrics));
     setShowExampleGuide(false);
     setGuideStep(0);
     setToast({
@@ -319,9 +345,18 @@ export function TranscriptionMate() {
               </button>
               <button
                 type="button"
+                onClick={handleSourceCheck}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+              >
+                <SearchCheck className="size-4" />
+                Detect Source
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setInput("");
                   setOutput("");
+                  setSourceReport(null);
                   setToast(null);
                 }}
                 className="inline-flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
@@ -364,6 +399,100 @@ export function TranscriptionMate() {
                 <Copy className="size-4" />
                 Copy to Clipboard
               </button>
+            </div>
+
+            <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <ShieldAlert className="size-4 text-[var(--accent)]" />
+                    Source Check
+                  </div>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    Separate from cleaning. Use it to flag likely copy-paste fingerprints and probable source sites.
+                  </p>
+                </div>
+                <div className={`rounded-full px-3 py-1 text-xs font-medium ${suspicionTone}`}>
+                  {sourceReport ? `${sourceReport.suspicion.toUpperCase()} suspicion` : "Not run yet"}
+                </div>
+              </div>
+
+              {sourceReport ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                    <p className="text-sm font-medium text-[var(--foreground)]">
+                      {sourceReport.summary}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                      This is a heuristic triage tool. It can point you toward likely source sites, but exact attribution still needs manual verification.
+                    </p>
+                  </div>
+
+                  {sourceReport.candidates.length > 0 ? (
+                    <div className="space-y-3">
+                      {sourceReport.candidates.map((candidate) => (
+                        <div
+                          key={candidate.domain}
+                          className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4"
+                        >
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <p className="text-sm font-semibold">{candidate.name}</p>
+                              <p className="text-xs text-[var(--muted)]">{candidate.domain}</p>
+                            </div>
+                            <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                              score {candidate.score}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 flex flex-col gap-2">
+                            {candidate.evidence.map((item) => (
+                              <div
+                                key={`${candidate.domain}-${item.clue}-${item.excerpt}`}
+                                className="rounded-xl border border-[var(--border)] bg-black/10 px-3 py-3"
+                              >
+                                <p className="text-sm font-medium">{item.clue}</p>
+                                <p className="mt-1 font-mono text-xs text-[var(--muted)]">
+                                  {item.excerpt}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {sourceReport.flags.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <div className="flex items-center gap-2 text-sm font-semibold">
+                        <BadgeAlert className="size-4 text-amber-400" />
+                        Risk Flags
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {sourceReport.flags.map((flag) => (
+                          <span
+                            key={`${flag.label}-${flag.severity}`}
+                            className={`rounded-full px-3 py-1 text-xs ${
+                              flag.severity === "high"
+                                ? "bg-rose-500/15 text-rose-400"
+                                : flag.severity === "medium"
+                                  ? "bg-amber-500/15 text-amber-400"
+                                  : "bg-emerald-500/15 text-emerald-400"
+                            }`}
+                          >
+                            {flag.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--panel-strong)] px-4 py-8 text-sm leading-6 text-[var(--muted)]">
+                  Run <span className="font-semibold text-[var(--foreground)]">Detect Source</span> after pasting lyrics to surface probable site fingerprints and copy-paste warning signs.
+                </div>
+              )}
             </div>
 
             <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">

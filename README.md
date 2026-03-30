@@ -6,6 +6,7 @@ TranscriptionMate is a single-page Next.js tool for cleaning and formatting raw 
 
 - Large input and output editors
 - One-click sanitizer flow
+- Separate source-check workflow for likely copy-paste fingerprints
 - Copy-to-clipboard feedback toast
 - Light and dark theme support
 - Responsive layout for desktop and mobile
