@@ -108,6 +108,10 @@ export function TranscriptionMate() {
   const [auditRateLimit, setAuditRateLimit] =
     useState<AuditResponse["rateLimit"] | null>(null);
   const [isAuditing, setIsAuditing] = useState(false);
+  const [feedbackSubmitted, setFeedbackSubmitted] = useState<"yes" | "no" | null>(
+    null,
+  );
+  const [isSendingFeedback, setIsSendingFeedback] = useState(false);
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
@@ -143,6 +147,22 @@ export function TranscriptionMate() {
   const inputStats = getStats(input);
   const outputStats = getStats(output);
   const activeGuideStep = guideSteps[guideStep];
+  const activeFeedbackSummary = auditResult?.rationale ?? sourceReport?.summary ?? "";
+  const activeFeedbackSourceName =
+    auditResult?.likelySourceName ??
+    sourceReport?.candidates[0]?.name ??
+    null;
+  const activeFeedbackSourceDomain =
+    auditResult?.likelySourceDomain ??
+    sourceReport?.candidates[0]?.domain ??
+    null;
+  const activeFeedbackSpamProbability =
+    auditResult?.spamProbability ??
+    (sourceReport?.suspicion === "high"
+      ? 90
+      : sourceReport?.suspicion === "medium"
+        ? 60
+        : 20);
   const suspicionTone =
     sourceReport?.suspicion === "high"
       ? "text-rose-400 bg-rose-500/15"
@@ -185,6 +205,7 @@ export function TranscriptionMate() {
   const handleSourceCheck = () => {
     const report = detectSource(input);
     setSourceReport(report);
+    setFeedbackSubmitted(null);
     setToast({
       message:
         report.suspicion === "high"
@@ -238,6 +259,7 @@ export function TranscriptionMate() {
       setAuditResult(payload.audit);
       setSourceReport(payload.audit.heuristic);
       setAuditRateLimit(payload.rateLimit);
+      setFeedbackSubmitted(null);
       setToast({
         message:
           payload.audit.mode === "ai"
@@ -260,12 +282,58 @@ export function TranscriptionMate() {
     setOutput("");
     setSourceReport(detectSource(demoLyrics));
     setAuditResult(null);
+    setFeedbackSubmitted(null);
     setShowExampleGuide(false);
     setGuideStep(0);
     setToast({
       message: "Example loaded into the input editor.",
       tone: "success",
     });
+  };
+
+  const handleFeedback = async (verdict: "yes" | "no") => {
+    if (!input.trim() || !activeFeedbackSummary) {
+      return;
+    }
+
+    setIsSendingFeedback(true);
+
+    try {
+      const response = await fetch("/api/feedback", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          auditSummary: activeFeedbackSummary,
+          inputExcerpt: input.slice(0, 600),
+          likelySourceDomain: activeFeedbackSourceDomain,
+          likelySourceName: activeFeedbackSourceName,
+          spamProbability: activeFeedbackSpamProbability,
+          verdict,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Feedback failed");
+      }
+
+      setFeedbackSubmitted(verdict);
+      setToast({
+        message:
+          verdict === "yes"
+            ? "Thanks, the result was marked as correct."
+            : "Thanks, this result was marked for retraining.",
+        tone: "success",
+      });
+    } catch {
+      setToast({
+        message: "Feedback could not be saved.",
+        tone: "error",
+      });
+    } finally {
+      setIsSendingFeedback(false);
+    }
   };
 
   return (
@@ -449,6 +517,7 @@ export function TranscriptionMate() {
                   setSourceReport(null);
                   setAuditResult(null);
                   setAuditRateLimit(null);
+                  setFeedbackSubmitted(null);
                   setToast(null);
                 }}
                 className="inline-flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
@@ -606,6 +675,43 @@ export function TranscriptionMate() {
                 </div>
               )}
             </div>
+
+            {sourceReport || auditResult ? (
+              <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold">Fetched Correctly?</p>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      Every verdict is saved and reused as training context for future audits.
+                    </p>
+                  </div>
+                  {feedbackSubmitted ? (
+                    <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--foreground)]">
+                      Marked {feedbackSubmitted.toUpperCase()}
+                    </span>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("yes")}
+                    disabled={isSendingFeedback || feedbackSubmitted !== null}
+                    className="inline-flex items-center justify-center rounded-2xl bg-emerald-500 px-5 py-3 text-sm font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFeedback("no")}
+                    disabled={isSendingFeedback || feedbackSubmitted !== null}
+                    className="inline-flex items-center justify-center rounded-2xl bg-rose-500 px-5 py-3 text-sm font-semibold text-white transition hover:-translate-y-0.5 hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

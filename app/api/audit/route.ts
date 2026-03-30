@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { buildManualSearchLinks, type SourceAuditResult } from "@/lib/source-audit";
 import { rateLimitAudit } from "@/lib/rate-limit";
 import { detectSource } from "@/lib/source-detector";
+import {
+  listFeedback,
+  listSiteProfiles,
+  listTrainingNotes,
+} from "@/lib/training-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -149,7 +154,22 @@ async function requestAiAudit(text: string) {
     return buildFallbackAudit(text);
   }
 
+  const [siteProfiles, trainingNotes, feedback] = await Promise.all([
+    listSiteProfiles(),
+    listTrainingNotes(),
+    listFeedback(),
+  ]);
+
   const promptPayload = {
+    feedbackLearnings: feedback
+      .filter((item) => item.verdict === "no")
+      .slice(0, 15)
+      .map((item) => ({
+        auditSummary: item.auditSummary,
+        likelySourceDomain: item.likelySourceDomain,
+        likelySourceName: item.likelySourceName,
+        spamProbability: item.spamProbability,
+      })),
     heuristicSummary: heuristic.summary,
     heuristicCandidates: heuristic.candidates.map((candidate) => ({
       domain: candidate.domain,
@@ -159,6 +179,17 @@ async function requestAiAudit(text: string) {
     })),
     heuristicFlags: heuristic.flags,
     lyrics: text,
+    siteProfiles: siteProfiles.slice(0, 30).map((profile) => ({
+      domain: profile.domain,
+      fingerprints: profile.fingerprints,
+      name: profile.name,
+      notes: profile.notes,
+      searchHint: profile.searchHint,
+    })),
+    trainingNotes: trainingNotes.slice(-20).map((note) => ({
+      author: note.author,
+      content: note.content,
+    })),
   };
 
   const response = await fetch(openAiApiUrl, {
@@ -173,7 +204,7 @@ async function requestAiAudit(text: string) {
         {
           role: "system",
           content:
-            'You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Focus on metadata artifacts, site-brand clues, footer remnants, translation labels, digital signatures, and AI-draft language. Be conservative: if the evidence is weak, say so. Output only JSON that matches the provided schema.',
+            'You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Use the supplied site profiles, admin training notes, and past incorrect-feedback examples as learned context. Focus on metadata artifacts, site-brand clues, footer remnants, translation labels, digital signatures, and AI-draft language. Be conservative: if the evidence is weak, say so. Output only JSON that matches the provided schema.',
         },
         {
           role: "user",
@@ -289,4 +320,3 @@ export async function POST(request: Request) {
     );
   }
 }
-
