@@ -6,10 +6,13 @@ import {
   ArrowRight,
   BadgeAlert,
   BookOpenText,
+  Bot,
   CircleAlert,
   Check,
   Copy,
+  ExternalLink,
   FileText,
+  LoaderCircle,
   ShieldAlert,
   MoonStar,
   SearchCheck,
@@ -17,6 +20,7 @@ import {
   SunMedium,
   WandSparkles,
 } from "lucide-react";
+import type { SourceAuditResult } from "@/lib/source-audit";
 import { sanitizeLyrics } from "@/lib/sanitize-lyrics";
 import { detectSource, type SourceReport } from "@/lib/source-detector";
 
@@ -26,6 +30,15 @@ type ToastState = {
   message: string;
   tone: "success" | "error";
 } | null;
+
+type AuditResponse = {
+  audit: SourceAuditResult;
+  rateLimit: {
+    limit: number;
+    remaining: number;
+    resetInSeconds: number;
+  };
+};
 
 const demoLyrics = `  [verse 1]
 I   got a pocket full of stars ,
@@ -91,6 +104,10 @@ export function TranscriptionMate() {
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
   const [sourceReport, setSourceReport] = useState<SourceReport | null>(null);
+  const [auditResult, setAuditResult] = useState<SourceAuditResult | null>(null);
+  const [auditRateLimit, setAuditRateLimit] =
+    useState<AuditResponse["rateLimit"] | null>(null);
+  const [isAuditing, setIsAuditing] = useState(false);
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
@@ -179,10 +196,70 @@ export function TranscriptionMate() {
     });
   };
 
+  const handleAiAudit = async () => {
+    if (!input.trim()) {
+      setToast({
+        message: "Paste lyrics before running an AI audit.",
+        tone: "error",
+      });
+      return;
+    }
+
+    setIsAuditing(true);
+
+    try {
+      const response = await fetch("/api/audit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: input }),
+      });
+
+      const payload = (await response.json()) as
+        | AuditResponse
+        | { error?: string; rateLimit?: AuditResponse["rateLimit"] };
+
+      if (!response.ok || !("audit" in payload)) {
+        const errorMessage = "error" in payload ? payload.error : undefined;
+
+        setToast({
+          message: errorMessage ?? "AI audit failed.",
+          tone: "error",
+        });
+
+        if ("rateLimit" in payload && payload.rateLimit) {
+          setAuditRateLimit(payload.rateLimit);
+        }
+
+        return;
+      }
+
+      setAuditResult(payload.audit);
+      setSourceReport(payload.audit.heuristic);
+      setAuditRateLimit(payload.rateLimit);
+      setToast({
+        message:
+          payload.audit.mode === "ai"
+            ? "AI audit completed."
+            : "AI not configured, fallback audit completed.",
+        tone: "success",
+      });
+    } catch {
+      setToast({
+        message: "AI audit failed.",
+        tone: "error",
+      });
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
   const handleLoadExample = () => {
     setInput(demoLyrics);
     setOutput("");
     setSourceReport(detectSource(demoLyrics));
+    setAuditResult(null);
     setShowExampleGuide(false);
     setGuideStep(0);
     setToast({
@@ -353,10 +430,25 @@ export function TranscriptionMate() {
               </button>
               <button
                 type="button"
+                onClick={handleAiAudit}
+                disabled={isAuditing}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isAuditing ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Bot className="size-4" />
+                )}
+                {isAuditing ? "Auditing..." : "AI Audit"}
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setInput("");
                   setOutput("");
                   setSourceReport(null);
+                  setAuditResult(null);
+                  setAuditRateLimit(null);
                   setToast(null);
                 }}
                 className="inline-flex items-center justify-center rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-5 py-3 text-sm font-medium text-[var(--foreground)] transition hover:-translate-y-0.5 hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
@@ -399,6 +491,120 @@ export function TranscriptionMate() {
                 <Copy className="size-4" />
                 Copy to Clipboard
               </button>
+            </div>
+
+            <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <Bot className="size-4 text-[var(--accent)]" />
+                    AI Audit
+                  </div>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    Server-side only. Runs a forensic prompt and combines it with local fingerprint detection.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                    {auditResult
+                      ? `${auditResult.spamProbability}% spam probability`
+                      : "Not run yet"}
+                  </span>
+                  <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                    {auditResult
+                      ? `${auditResult.confidence} confidence`
+                      : "Server-only"}
+                  </span>
+                </div>
+              </div>
+
+              {auditResult ? (
+                <div className="space-y-4">
+                  <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold">
+                          {auditResult.likelySourceName
+                            ? `Likely source: ${auditResult.likelySourceName}`
+                            : "No specific source named"}
+                        </p>
+                        <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                          {auditResult.rationale}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--foreground)]">
+                        {auditResult.mode === "ai" ? "AI mode" : "Fallback mode"}
+                      </span>
+                    </div>
+
+                    <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
+                      Recommendation: {auditResult.recommendedAction}
+                    </p>
+                  </div>
+
+                  {auditResult.indicators.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <p className="text-sm font-semibold">Detected indicators</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {auditResult.indicators.map((indicator) => (
+                          <span
+                            key={indicator}
+                            className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]"
+                          >
+                            {indicator}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {auditResult.aiArtifacts.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <p className="text-sm font-semibold">AI-draft clues</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {auditResult.aiArtifacts.map((artifact) => (
+                          <span
+                            key={artifact}
+                            className="rounded-full bg-amber-500/15 px-3 py-1 text-xs text-amber-400"
+                          >
+                            {artifact}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {auditResult.manualSearches.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <p className="text-sm font-semibold">Manual verification</p>
+                      <div className="mt-3 flex flex-col gap-2">
+                        {auditResult.manualSearches.map((search) => (
+                          <a
+                            key={search.url}
+                            href={search.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-2 rounded-2xl border border-[var(--border)] px-4 py-3 text-sm text-[var(--foreground)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                          >
+                            <ExternalLink className="size-4" />
+                            {search.label}
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {auditRateLimit ? (
+                    <p className="text-xs text-[var(--muted)]">
+                      Rate limit: {auditRateLimit.remaining} of {auditRateLimit.limit} audits left this window.
+                    </p>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-[var(--border)] bg-[var(--panel-strong)] px-4 py-8 text-sm leading-6 text-[var(--muted)]">
+                  Run <span className="font-semibold text-[var(--foreground)]">AI Audit</span> to score spam probability, name likely external sources, and generate manual search links.
+                </div>
+              )}
             </div>
 
             <div className="rounded-[28px] border border-[var(--border)] bg-[var(--panel)] p-5 shadow-[0_18px_60px_rgba(15,23,42,0.12)] backdrop-blur xl:p-6">
