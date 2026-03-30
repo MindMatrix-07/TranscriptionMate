@@ -7,8 +7,17 @@ export type AuditManualSearch = {
   url: string;
 };
 
+export type AuditWebEvidence = {
+  providerId: string;
+  score?: number | null;
+  snippet: string;
+  title: string;
+  url: string;
+};
+
 export type SourceAuditResult = {
   aiArtifacts: string[];
+  auditRunId?: string | null;
   confidence: AuditConfidence;
   heuristic: SourceReport;
   indicators: string[];
@@ -16,10 +25,13 @@ export type SourceAuditResult = {
   likelySourceName: string | null;
   manualSearches: AuditManualSearch[];
   mode: "ai" | "heuristic";
+  providerChain?: string[];
+  providerId?: string | null;
   providerConfigured: boolean;
   rationale: string;
   recommendedAction: string;
   spamProbability: number;
+  webEvidence?: AuditWebEvidence[];
 };
 
 function buildGoogleSearch(query: string) {
@@ -27,7 +39,7 @@ function buildGoogleSearch(query: string) {
   return `https://www.google.com/search?${params.toString()}`;
 }
 
-function getSearchableLines(rawLyrics: string) {
+export function getSearchableLines(rawLyrics: string) {
   return rawLyrics
     .replace(/\r\n?/g, "\n")
     .split("\n")
@@ -74,4 +86,3 @@ export function buildManualSearchLinks(
 
   return searches;
 }
-

@@ -7,10 +7,12 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
+      auditRunId?: string | null;
       auditSummary?: string;
       inputExcerpt?: string;
       likelySourceDomain?: string | null;
       likelySourceName?: string | null;
+      providerId?: string | null;
       spamProbability?: number;
       verdict?: "yes" | "no";
     };
@@ -23,10 +25,12 @@ export async function POST(request: Request) {
     }
 
     const feedback = await appendFeedback({
+      auditRunId: body.auditRunId ?? null,
       auditSummary: body.auditSummary ?? "",
       inputExcerpt: body.inputExcerpt.slice(0, 600),
       likelySourceDomain: body.likelySourceDomain ?? null,
       likelySourceName: body.likelySourceName ?? null,
+      providerId: body.providerId ?? null,
       spamProbability: Number(body.spamProbability ?? 0),
       verdict: body.verdict,
     });

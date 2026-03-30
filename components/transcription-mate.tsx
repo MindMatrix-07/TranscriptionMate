@@ -83,6 +83,25 @@ function getStats(value: string) {
   return { characters, lines };
 }
 
+function getHostname(value: string) {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
+}
+
+function formatProviderName(value?: string | null) {
+  if (!value) {
+    return "No provider";
+  }
+
+  return value
+    .split("-")
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
 async function copyText(value: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -156,6 +175,8 @@ export function TranscriptionMate() {
     auditResult?.likelySourceDomain ??
     sourceReport?.candidates[0]?.domain ??
     null;
+  const activeFeedbackAuditRunId = auditResult?.auditRunId ?? null;
+  const activeFeedbackProviderId = auditResult?.providerId ?? null;
   const activeFeedbackSpamProbability =
     auditResult?.spamProbability ??
     (sourceReport?.suspicion === "high"
@@ -305,10 +326,12 @@ export function TranscriptionMate() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          auditRunId: activeFeedbackAuditRunId,
           auditSummary: activeFeedbackSummary,
           inputExcerpt: input.slice(0, 600),
           likelySourceDomain: activeFeedbackSourceDomain,
           likelySourceName: activeFeedbackSourceName,
+          providerId: activeFeedbackProviderId,
           spamProbability: activeFeedbackSpamProbability,
           verdict,
         }),
@@ -584,6 +607,11 @@ export function TranscriptionMate() {
                       ? `${auditResult.confidence} confidence`
                       : "Server-only"}
                   </span>
+                  <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                    {auditResult?.providerId
+                      ? `Provider: ${formatProviderName(auditResult.providerId)}`
+                      : "Provider router ready"}
+                  </span>
                 </div>
               </div>
 
@@ -609,6 +637,15 @@ export function TranscriptionMate() {
                     <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
                       Recommendation: {auditResult.recommendedAction}
                     </p>
+
+                    {auditResult.providerChain && auditResult.providerChain.length > 0 ? (
+                      <p className="mt-2 text-xs leading-5 text-[var(--muted)]">
+                        Provider chain:{" "}
+                        {auditResult.providerChain
+                          .map((providerId) => formatProviderName(providerId))
+                          .join(" -> ")}
+                      </p>
+                    ) : null}
                   </div>
 
                   {auditResult.indicators.length > 0 ? (
@@ -638,6 +675,41 @@ export function TranscriptionMate() {
                           >
                             {artifact}
                           </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {auditResult.webEvidence && auditResult.webEvidence.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <p className="text-sm font-semibold">Fetched web evidence</p>
+                      <div className="mt-3 space-y-3">
+                        {auditResult.webEvidence.map((item) => (
+                          <a
+                            key={`${item.url}-${item.title}`}
+                            href={item.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block rounded-2xl border border-[var(--border)] px-4 py-4 text-sm transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                          >
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="font-semibold">{item.title}</p>
+                                <p className="text-xs text-[var(--muted)]">
+                                  {getHostname(item.url)}
+                                </p>
+                              </div>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {formatProviderName(item.providerId)}
+                                {typeof item.score === "number"
+                                  ? ` · ${item.score.toFixed(2)}`
+                                  : ""}
+                              </span>
+                            </div>
+                            <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                              {item.snippet}
+                            </p>
+                          </a>
                         ))}
                       </div>
                     </div>

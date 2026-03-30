@@ -1,8 +1,16 @@
 import { NextResponse } from "next/server";
-import { buildManualSearchLinks, type SourceAuditResult } from "@/lib/source-audit";
+import {
+  buildManualSearchLinks,
+  type SourceAuditResult,
+} from "@/lib/source-audit";
+import {
+  collectWebEvidence,
+  getLikelyDomainFromEvidence,
+} from "@/lib/provider-router";
 import { rateLimitAudit } from "@/lib/rate-limit";
 import { detectSource } from "@/lib/source-detector";
 import {
+  appendAuditRun,
   listFeedback,
   listSiteProfiles,
   listTrainingNotes,
@@ -66,6 +74,14 @@ const auditSchema = {
   ],
 } as const;
 
+type AuditContext = {
+  feedback: Awaited<ReturnType<typeof listFeedback>>;
+  heuristic: ReturnType<typeof detectSource>;
+  siteProfiles: Awaited<ReturnType<typeof listSiteProfiles>>;
+  trainingNotes: Awaited<ReturnType<typeof listTrainingNotes>>;
+  webSearch: Awaited<ReturnType<typeof collectWebEvidence>>;
+};
+
 function getClientIp(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
 
@@ -113,83 +129,118 @@ function extractOutputText(payload: unknown) {
   return null;
 }
 
-function buildFallbackAudit(text: string) {
-  const heuristic = detectSource(text);
-  const topCandidate = heuristic.candidates[0];
+function buildFallbackAudit(text: string, context: AuditContext) {
+  const topCandidate = context.heuristic.candidates[0];
+  const evidenceDomain = getLikelyDomainFromEvidence(context.webSearch.webEvidence);
+  const likelySourceDomain = topCandidate?.domain ?? evidenceDomain;
+  const likelySourceName = topCandidate?.name ?? evidenceDomain;
+  const hasEvidence = context.webSearch.webEvidence.length > 0;
+  const indicators = [
+    ...(topCandidate?.evidence.map((item) => item.clue) ?? []),
+    ...context.webSearch.webEvidence
+      .slice(0, 2)
+      .map((item) => `Web match: ${item.title}`),
+  ];
+  const confidence =
+    context.heuristic.suspicion === "high"
+      ? "high"
+      : context.heuristic.suspicion === "medium" || hasEvidence
+        ? "medium"
+        : "low";
+  const spamProbability =
+    context.heuristic.suspicion === "high"
+      ? 90
+      : context.heuristic.suspicion === "medium"
+        ? 60
+        : hasEvidence
+          ? 45
+          : 20;
 
   return {
     aiArtifacts: [],
-    confidence:
-      heuristic.suspicion === "high"
-        ? "high"
-        : heuristic.suspicion === "medium"
-          ? "medium"
-          : "low",
-    heuristic,
-    indicators: topCandidate?.evidence.map((item) => item.clue) ?? [],
-    likelySourceDomain: topCandidate?.domain ?? null,
-    likelySourceName: topCandidate?.name ?? null,
-    manualSearches: buildManualSearchLinks(text, topCandidate?.domain ?? null),
+    confidence,
+    heuristic: context.heuristic,
+    indicators,
+    likelySourceDomain,
+    likelySourceName,
+    manualSearches: buildManualSearchLinks(text, likelySourceDomain),
     mode: "heuristic",
-    providerConfigured: false,
-    rationale: heuristic.summary,
-    recommendedAction:
-      topCandidate || heuristic.flags.length > 0
+    providerChain: context.webSearch.fallbackChain,
+    providerConfigured: Boolean(process.env.OPENAI_API_KEY),
+    providerId: context.webSearch.providerId,
+    rationale: hasEvidence
+      ? `${context.heuristic.summary} ${context.webSearch.notes}`
+      : context.heuristic.summary,
+    recommendedAction: hasEvidence
+      ? "Review the fetched web evidence and compare the exact lyric lines before accepting this submission."
+      : topCandidate || context.heuristic.flags.length > 0
         ? "Manually verify the top lyric line before accepting this submission."
         : "No strong external-source clues were found, but a manual spot-check is still wise for public submissions.",
-    spamProbability:
-      heuristic.suspicion === "high"
-        ? 90
-        : heuristic.suspicion === "medium"
-          ? 60
-          : 20,
+    spamProbability,
+    webEvidence: context.webSearch.webEvidence,
   } satisfies SourceAuditResult;
 }
 
-async function requestAiAudit(text: string) {
-  const heuristic = detectSource(text);
+function buildAuditStatus(
+  audit: SourceAuditResult,
+  context: AuditContext,
+): "success" | "fallback" | "heuristic" | "error" {
+  if (audit.mode === "ai") {
+    return context.webSearch.status;
+  }
+
+  if (context.webSearch.webEvidence.length > 0) {
+    return context.webSearch.status === "error"
+      ? "fallback"
+      : context.webSearch.status;
+  }
+
+  return context.webSearch.status === "error" ? "error" : "heuristic";
+}
+
+async function requestAiAudit(text: string, context: AuditContext) {
   const apiKey = process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    return buildFallbackAudit(text);
+    return buildFallbackAudit(text, context);
   }
 
-  const [siteProfiles, trainingNotes, feedback] = await Promise.all([
-    listSiteProfiles(),
-    listTrainingNotes(),
-    listFeedback(),
-  ]);
-
   const promptPayload = {
-    feedbackLearnings: feedback
+    feedbackLearnings: context.feedback
       .filter((item) => item.verdict === "no")
       .slice(0, 15)
       .map((item) => ({
         auditSummary: item.auditSummary,
         likelySourceDomain: item.likelySourceDomain,
         likelySourceName: item.likelySourceName,
+        providerId: item.providerId ?? null,
         spamProbability: item.spamProbability,
       })),
-    heuristicSummary: heuristic.summary,
-    heuristicCandidates: heuristic.candidates.map((candidate) => ({
+    heuristicCandidates: context.heuristic.candidates.map((candidate) => ({
       domain: candidate.domain,
       evidence: candidate.evidence.map((item) => item.clue),
       name: candidate.name,
       score: candidate.score,
     })),
-    heuristicFlags: heuristic.flags,
+    heuristicFlags: context.heuristic.flags,
+    heuristicSummary: context.heuristic.summary,
     lyrics: text,
-    siteProfiles: siteProfiles.slice(0, 30).map((profile) => ({
+    providerChain: context.webSearch.fallbackChain,
+    providerId: context.webSearch.providerId,
+    siteProfiles: context.siteProfiles.slice(0, 30).map((profile) => ({
       domain: profile.domain,
       fingerprints: profile.fingerprints,
       name: profile.name,
       notes: profile.notes,
       searchHint: profile.searchHint,
     })),
-    trainingNotes: trainingNotes.slice(-20).map((note) => ({
+    trainingNotes: context.trainingNotes.slice(-20).map((note) => ({
       author: note.author,
       content: note.content,
     })),
+    webEvidence: context.webSearch.webEvidence,
+    webSearchNotes: context.webSearch.notes,
+    webSearchQueries: context.webSearch.queries,
   };
 
   const response = await fetch(openAiApiUrl, {
@@ -204,7 +255,7 @@ async function requestAiAudit(text: string) {
         {
           role: "system",
           content:
-            'You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Use the supplied site profiles, admin training notes, and past incorrect-feedback examples as learned context. Focus on metadata artifacts, site-brand clues, footer remnants, translation labels, digital signatures, and AI-draft language. Be conservative: if the evidence is weak, say so. Output only JSON that matches the provided schema.',
+            "You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Use the supplied site profiles, admin training notes, past incorrect-feedback examples, and fetched web evidence as learned context. Focus on metadata artifacts, site-brand clues, footer remnants, translation labels, digital signatures, and AI-draft language. Be conservative: if the evidence is weak, say so. Output only JSON that matches the provided schema.",
         },
         {
           role: "user",
@@ -236,18 +287,30 @@ async function requestAiAudit(text: string) {
 
   const parsed = JSON.parse(outputText) as Omit<
     SourceAuditResult,
-    "heuristic" | "manualSearches" | "mode" | "providerConfigured"
+    | "auditRunId"
+    | "heuristic"
+    | "manualSearches"
+    | "mode"
+    | "providerChain"
+    | "providerConfigured"
+    | "providerId"
+    | "webEvidence"
   >;
+  const likelySourceDomain =
+    parsed.likelySourceDomain ??
+    context.heuristic.candidates[0]?.domain ??
+    getLikelyDomainFromEvidence(context.webSearch.webEvidence);
 
   return {
     ...parsed,
-    heuristic,
-    manualSearches: buildManualSearchLinks(
-      text,
-      parsed.likelySourceDomain ?? heuristic.candidates[0]?.domain ?? null,
-    ),
+    heuristic: context.heuristic,
+    likelySourceDomain,
+    manualSearches: buildManualSearchLinks(text, likelySourceDomain),
     mode: "ai",
+    providerChain: context.webSearch.fallbackChain,
     providerConfigured: true,
+    providerId: context.webSearch.providerId,
+    webEvidence: context.webSearch.webEvidence,
   } satisfies SourceAuditResult;
 }
 
@@ -292,13 +355,47 @@ export async function POST(request: Request) {
       );
     }
 
+    const heuristic = detectSource(text);
+    const [siteProfiles, trainingNotes, feedback] = await Promise.all([
+      listSiteProfiles(),
+      listTrainingNotes(),
+      listFeedback(),
+    ]);
+    const webSearch = await collectWebEvidence(text, heuristic, siteProfiles);
+    const context: AuditContext = {
+      feedback,
+      heuristic,
+      siteProfiles,
+      trainingNotes,
+      webSearch,
+    };
+
     let audit: SourceAuditResult;
 
     try {
-      audit = await requestAiAudit(text);
+      audit = await requestAiAudit(text, context);
     } catch {
-      audit = buildFallbackAudit(text);
+      audit = buildFallbackAudit(text, context);
     }
+
+    const auditRun = await appendAuditRun({
+      fallbackChain: context.webSearch.fallbackChain,
+      inputHash: context.webSearch.inputHash,
+      likelySourceDomain: audit.likelySourceDomain,
+      likelySourceName: audit.likelySourceName,
+      notes: `${context.webSearch.notes} ${audit.rationale}`.trim(),
+      providerId: context.webSearch.providerId,
+      queries: context.webSearch.queries,
+      searchResultCount: context.webSearch.searchResultCount,
+      spamProbability: audit.spamProbability,
+      status: buildAuditStatus(audit, context),
+      webEvidence: context.webSearch.webEvidence,
+    });
+
+    audit = {
+      ...audit,
+      auditRunId: auditRun.id,
+    };
 
     return NextResponse.json(
       {
