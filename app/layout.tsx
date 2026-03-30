@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "TranscriptionMate",
-  description: "Clean and format lyrics for Musixmatch.",
+  description: "Clean and format lyrics with a polished one-page workflow.",
 };
 
 const themeScript = `
@@ -29,4 +29,3 @@ export default function RootLayout({
     </html>
   );
 }
-

@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from "react";
 import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpenText,
   CircleAlert,
   Check,
   Copy,
@@ -30,6 +33,32 @@ We run through the city .
 We sing till the sun comes up\u200B
 `;
 
+const formattedDemoLyrics = sanitizeLyrics(demoLyrics);
+
+const guideSteps = [
+  {
+    title: "Start with raw lyrics",
+    description:
+      "This sample includes uneven spacing, lowercase section labels, punctuation gaps, and a hidden zero-width space.",
+    preview: demoLyrics,
+    label: "Raw example",
+  },
+  {
+    title: "See what gets cleaned",
+    description:
+      "The sanitizer trims the text, fixes tags, removes junk spacing, and keeps stanza breaks tidy.",
+    preview: formattedDemoLyrics,
+    label: "Cleaned result",
+  },
+  {
+    title: "Load the example into the editor",
+    description:
+      "Use this sample if you want to test the tool quickly, then replace it with your own lyrics whenever you're ready.",
+    preview: demoLyrics,
+    label: "Ready to try",
+  },
+] as const;
+
 function getStats(value: string) {
   const characters = value.length;
   const lines = value ? value.split("\n").length : 0;
@@ -55,11 +84,13 @@ async function copyText(value: string) {
 }
 
 export function TranscriptionMate() {
-  const [input, setInput] = useState(demoLyrics);
+  const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
   const [theme, setTheme] = useState<Theme>("light");
   const [mounted, setMounted] = useState(false);
   const [toast, setToast] = useState<ToastState>(null);
+  const [showExampleGuide, setShowExampleGuide] = useState(false);
+  const [guideStep, setGuideStep] = useState(0);
 
   useEffect(() => {
     const isDark = document.documentElement.classList.contains("dark");
@@ -89,6 +120,7 @@ export function TranscriptionMate() {
 
   const inputStats = getStats(input);
   const outputStats = getStats(output);
+  const activeGuideStep = guideSteps[guideStep];
 
   const handleClean = () => {
     const sanitized = sanitizeLyrics(input);
@@ -122,6 +154,17 @@ export function TranscriptionMate() {
     }
   };
 
+  const handleLoadExample = () => {
+    setInput(demoLyrics);
+    setOutput("");
+    setShowExampleGuide(false);
+    setGuideStep(0);
+    setToast({
+      message: "Example loaded into the input editor.",
+      tone: "success",
+    });
+  };
+
   return (
     <main className="relative min-h-screen overflow-hidden px-4 py-6 sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
@@ -130,7 +173,7 @@ export function TranscriptionMate() {
             <div className="space-y-2">
               <div className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-strong)] px-3 py-1 text-xs font-semibold tracking-[0.24em] text-[var(--muted)] uppercase">
                 <Sparkles className="size-3.5 text-[var(--accent)]" />
-                Musixmatch Sanitizer
+                Lyrics Sanitizer
               </div>
               <div>
                 <h1 className="text-3xl font-semibold tracking-[-0.04em] sm:text-4xl">
@@ -138,8 +181,7 @@ export function TranscriptionMate() {
                 </h1>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)] sm:text-base">
                   Clean pasted lyrics in one pass, normalize section tags, and
-                  copy a Musixmatch-ready transcript without hand-fixing every
-                  stanza.
+                  copy a polished transcript without hand-fixing every stanza.
                 </p>
               </div>
             </div>
@@ -176,18 +218,95 @@ export function TranscriptionMate() {
                   Paste raw lyrics, tags, and spacing issues here.
                 </p>
               </div>
-              <div className="rounded-full border border-[var(--border)] bg-[var(--panel-strong)] px-3 py-1 text-xs text-[var(--muted)]">
-                {inputStats.lines} lines · {inputStats.characters} chars
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExampleGuide((current) => !current);
+                    setGuideStep(0);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--panel-strong)] px-3 py-1 text-xs font-medium text-[var(--foreground)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)]"
+                >
+                  <BookOpenText className="size-3.5" />
+                  {showExampleGuide ? "Hide Example" : "Example Guide"}
+                </button>
+                <div className="rounded-full border border-[var(--border)] bg-[var(--panel-strong)] px-3 py-1 text-xs text-[var(--muted)]">
+                  {inputStats.lines} lines · {inputStats.characters} chars
+                </div>
               </div>
             </div>
 
             <textarea
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="Paste raw lyrics here..."
+              placeholder="Paste raw lyrics here, or open the example guide."
               spellCheck={false}
               className="min-h-[360px] w-full rounded-[24px] border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4 font-mono text-sm leading-7 text-[var(--foreground)] outline-none transition focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
             />
+
+            {showExampleGuide ? (
+              <div className="mt-4 rounded-[24px] border border-[var(--border)] bg-[var(--panel-strong)] p-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold tracking-[0.2em] text-[var(--muted)] uppercase">
+                      Step {guideStep + 1} of {guideSteps.length}
+                    </p>
+                    <h3 className="mt-1 text-lg font-semibold">
+                      {activeGuideStep.title}
+                    </h3>
+                    <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+                      {activeGuideStep.description}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                    {activeGuideStep.label}
+                  </span>
+                </div>
+
+                <pre className="mt-4 overflow-x-auto rounded-2xl border border-[var(--border)] bg-black/20 px-4 py-4 font-mono text-sm leading-7 text-[var(--foreground)]">
+                  <code>{activeGuideStep.preview}</code>
+                </pre>
+
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setGuideStep((currentStep) =>
+                          Math.max(currentStep - 1, 0),
+                        )
+                      }
+                      disabled={guideStep === 0}
+                      className="inline-flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-transparent px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <ArrowLeft className="size-4" />
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setGuideStep((currentStep) =>
+                          Math.min(currentStep + 1, guideSteps.length - 1),
+                        )
+                      }
+                      disabled={guideStep === guideSteps.length - 1}
+                      className="inline-flex items-center gap-2 rounded-2xl border border-[var(--border)] bg-transparent px-4 py-2 text-sm font-medium text-[var(--foreground)] transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      Next
+                      <ArrowRight className="size-4" />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleLoadExample}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-slate-950 transition hover:-translate-y-0.5 hover:bg-[var(--accent-strong)]"
+                  >
+                    Use This Example
+                  </button>
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <button

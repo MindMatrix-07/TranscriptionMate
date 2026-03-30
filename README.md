@@ -1,6 +1,6 @@
 # TranscriptionMate
 
-TranscriptionMate is a single-page Next.js tool for cleaning and formatting raw lyrics before submitting them to Musixmatch.
+TranscriptionMate is a single-page Next.js tool for cleaning and formatting raw lyrics with a polished editing workflow.
 
 ## Features
 
@@ -16,4 +16,3 @@ TranscriptionMate is a single-page Next.js tool for cleaning and formatting raw 
 npm install
 npm run dev
 ```
-
