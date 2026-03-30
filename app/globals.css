@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --background: #f4f7fb;
+  --foreground: #101828;
+  --muted: #5f6b7a;
+  --panel: rgba(255, 255, 255, 0.86);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --border: rgba(15, 23, 42, 0.08);
+  --accent: #0f9ad8;
+  --accent-strong: #0b6fbf;
+  --accent-soft: rgba(15, 154, 216, 0.14);
+  --success: #16a34a;
+  --glow-1: rgba(34, 211, 238, 0.22);
+  --glow-2: rgba(59, 130, 246, 0.18);
+}
+
+html.dark {
+  color-scheme: dark;
+  --background: #07111f;
+  --foreground: #edf4ff;
+  --muted: #91a1b8;
+  --panel: rgba(9, 19, 35, 0.78);
+  --panel-strong: rgba(8, 18, 33, 0.92);
+  --border: rgba(148, 163, 184, 0.18);
+  --accent: #61dafb;
+  --accent-strong: #9ae6ff;
+  --accent-soft: rgba(97, 218, 251, 0.16);
+  --success: #4ade80;
+  --glow-1: rgba(34, 211, 238, 0.16);
+  --glow-2: rgba(79, 70, 229, 0.16);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at top left, var(--glow-1), transparent 32%),
+    radial-gradient(circle at top right, var(--glow-2), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
+    var(--background);
+  color: var(--foreground);
+  font-family:
+    "Segoe UI Variable Text",
+    "Aptos",
+    "SF Pro Display",
+    "Helvetica Neue",
+    sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, -10px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
