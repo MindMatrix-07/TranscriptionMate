@@ -95,6 +95,56 @@ export function getComparableLyricLines(rawLyrics: string) {
     .filter((line) => isComparableLyricsLine(line));
 }
 
+export function buildSearchQueryChunks(
+  rawLyrics: string,
+  options?: {
+    maxChunkChars?: number;
+    maxChunks?: number;
+  },
+) {
+  const lines = getComparableLyricLines(rawLyrics);
+  const maxChunkChars = options?.maxChunkChars ?? 110;
+  const maxChunks = options?.maxChunks ?? 3;
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  const chunkCount = Math.max(1, Math.min(maxChunks, lines.length));
+  const chunks: string[] = [];
+
+  for (let index = 0; index < chunkCount; index += 1) {
+    const start = Math.floor((index * lines.length) / chunkCount);
+    const end =
+      index === chunkCount - 1
+        ? lines.length
+        : Math.floor(((index + 1) * lines.length) / chunkCount);
+    const bucket = lines.slice(start, Math.max(start + 1, end));
+    const chunkLines: string[] = [];
+    let length = 0;
+
+    for (const line of bucket) {
+      const nextLength =
+        length === 0 ? line.length : length + 1 + line.length;
+
+      if (chunkLines.length > 0 && nextLength > maxChunkChars) {
+        break;
+      }
+
+      chunkLines.push(line);
+      length = nextLength;
+    }
+
+    const chunk = chunkLines.join(" ").trim();
+
+    if (chunk) {
+      chunks.push(chunk);
+    }
+  }
+
+  return [...new Set(chunks)];
+}
+
 export function getSearchableLines(rawLyrics: string) {
   return getComparableLyricLines(rawLyrics)
     .sort((left, right) => getQueryPriority(right) - getQueryPriority(left))

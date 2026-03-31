@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { getSearchableLines, type AuditWebEvidence } from "@/lib/source-audit";
+import {
+  buildSearchQueryChunks,
+  getSearchableLines,
+  type AuditWebEvidence,
+} from "@/lib/source-audit";
 import type { SourceReport } from "@/lib/source-detector";
 import {
   listAuditRuns,
@@ -152,26 +156,40 @@ function getMatchingDomains(
 
 function buildQueries(text: string, heuristic: SourceReport, siteProfiles: SiteProfile[]) {
   const lines = getSearchableLines(text);
+  const queryChunks = buildSearchQueryChunks(text, {
+    maxChunkChars: 110,
+    maxChunks: 3,
+  });
+  const fingerprintQuery = queryChunks.map((chunk) => `"${chunk}"`).join(" ");
   const primaryLine = lines[0];
-  const secondaryLine = lines[1];
   const matchingDomains = getMatchingDomains(text, heuristic, siteProfiles).slice(0, 2);
   const queries: string[] = [];
 
-  if (primaryLine && matchingDomains[0]) {
-    queries.push(`site:${matchingDomains[0]} "${primaryLine}"`);
+  if (fingerprintQuery && matchingDomains[0]) {
+    queries.push(`site:${matchingDomains[0]} ${fingerprintQuery}`);
   }
 
-  if (primaryLine && secondaryLine) {
-    queries.push(`"${primaryLine}" "${secondaryLine}" lyrics`);
-  } else if (primaryLine) {
-    queries.push(`"${primaryLine}" lyrics`);
+  if (fingerprintQuery && matchingDomains[1]) {
+    queries.push(`site:${matchingDomains[1]} ${fingerprintQuery}`);
+  }
+
+  if (fingerprintQuery) {
+    queries.push(`${fingerprintQuery} lyrics`);
+  }
+
+  if (primaryLine && matchingDomains[0]) {
+    queries.push(`site:${matchingDomains[0]} "${primaryLine}"`);
   }
 
   if (primaryLine && matchingDomains[1]) {
     queries.push(`site:${matchingDomains[1]} "${primaryLine}"`);
   }
 
-  return [...new Set(queries)].slice(0, 3);
+  if (primaryLine) {
+    queries.push(`"${primaryLine}" lyrics`);
+  }
+
+  return [...new Set(queries)].slice(0, 6);
 }
 
 function extractGeminiText(candidate: {
