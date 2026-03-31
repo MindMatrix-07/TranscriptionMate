@@ -1,3 +1,5 @@
+import type { LyricLanguage } from "@/lib/lyric-language";
+
 type SharedItem = {
   createdAt: string;
   id: string;
@@ -9,6 +11,16 @@ export type SiteProfile = SharedItem & {
   name: string;
   notes: string;
   searchHint: string;
+  updatedAt: string;
+};
+
+export type AuditSource = SharedItem & {
+  domain: string;
+  enabled: boolean;
+  language: LyricLanguage;
+  name: string;
+  notes: string;
+  origin: "feedback" | "manual";
   updatedAt: string;
 };
 
@@ -76,6 +88,7 @@ export type AuditRun = SharedItem & {
 const sharedMemoryStore = new Map<string, string>();
 
 const storageKeys = {
+  auditSources: "trainer:audit-sources",
   auditRuns: "trainer:audit-runs",
   feedback: "trainer:feedback",
   lessons: "trainer:lessons",
@@ -181,6 +194,64 @@ async function readList<T>(key: string) {
 
 async function writeList<T>(key: string, items: T[]) {
   await upstashSet(key, items);
+}
+
+function normalizeDomain(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "");
+}
+
+export async function listAuditSources() {
+  return readList<AuditSource>(storageKeys.auditSources);
+}
+
+export async function upsertAuditSource(
+  source: Omit<AuditSource, "createdAt" | "id" | "updatedAt"> & {
+    id?: string;
+  },
+) {
+  const items = await listAuditSources();
+  const now = new Date().toISOString();
+  const normalizedDomain = normalizeDomain(source.domain);
+  const existing =
+    items.find((item) => item.id === source.id) ??
+    items.find(
+      (item) =>
+        item.language === source.language &&
+        normalizeDomain(item.domain) === normalizedDomain,
+    );
+
+  const nextSource: AuditSource = existing
+    ? {
+        ...existing,
+        ...source,
+        domain: normalizedDomain,
+        updatedAt: now,
+      }
+    : {
+        ...source,
+        createdAt: now,
+        domain: normalizedDomain,
+        id: createId("source"),
+        updatedAt: now,
+      };
+
+  const nextItems = existing
+    ? items.map((item) => (item.id === existing.id ? nextSource : item))
+    : [nextSource, ...items];
+
+  await writeList(storageKeys.auditSources, nextItems);
+  return nextSource;
+}
+
+export async function deleteAuditSource(id: string) {
+  const items = await listAuditSources();
+  const nextItems = items.filter((item) => item.id !== id);
+  await writeList(storageKeys.auditSources, nextItems);
 }
 
 export async function listSiteProfiles() {

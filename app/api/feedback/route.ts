@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { appendFeedback } from "@/lib/training-store";
+import { detectLyricLanguage } from "@/lib/lyric-language";
+import { appendFeedback, upsertAuditSource } from "@/lib/training-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,19 @@ export async function POST(request: Request) {
       spamProbability: Number(body.spamProbability ?? 0),
       verdict: body.verdict,
     });
+
+    if (body.verdict === "yes" && body.likelySourceDomain) {
+      const detectedLanguage = detectLyricLanguage(body.inputExcerpt);
+
+      await upsertAuditSource({
+        domain: body.likelySourceDomain,
+        enabled: true,
+        language: detectedLanguage,
+        name: body.likelySourceName?.trim() || body.likelySourceDomain,
+        notes: `Auto-added from confirmed feedback on ${new Date().toISOString()}.`,
+        origin: "feedback",
+      });
+    }
 
     return NextResponse.json({ feedback });
   } catch {

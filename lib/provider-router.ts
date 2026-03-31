@@ -1,19 +1,28 @@
 import { createHash } from "node:crypto";
 import {
+  detectLyricLanguage,
+  languageMatchesSource,
+  type LyricLanguage,
+} from "@/lib/lyric-language";
+import {
   buildSearchQueryChunks,
   getSearchableLines,
   type AuditWebEvidence,
 } from "@/lib/source-audit";
 import type { SourceReport } from "@/lib/source-detector";
 import {
+  listAuditSources,
   listAuditRuns,
   listProviderSettings,
+  type AuditSource,
   type AuditRun,
   type ProviderSetting,
   type SiteProfile,
 } from "@/lib/training-store";
 
 type ProviderSearchContext = {
+  auditSources: AuditSource[];
+  detectedLanguage: LyricLanguage;
   heuristic: SourceReport;
   siteProfiles: SiteProfile[];
   text: string;
@@ -128,8 +137,16 @@ function getMatchingDomains(
   text: string,
   heuristic: SourceReport,
   siteProfiles: SiteProfile[],
+  auditSources: AuditSource[],
+  detectedLanguage: LyricLanguage,
 ) {
   const lowered = text.toLowerCase();
+  const sourceDomains = auditSources
+    .filter(
+      (source) =>
+        source.enabled && languageMatchesSource(detectedLanguage, source.language),
+    )
+    .map((source) => source.domain);
   const profileMatches = siteProfiles
     .filter((profile) => {
       if (lowered.includes(profile.domain.toLowerCase())) {
@@ -148,13 +165,20 @@ function getMatchingDomains(
 
   return [
     ...new Set([
+      ...sourceDomains,
       ...heuristic.candidates.map((item) => item.domain),
       ...profileMatches,
     ]),
   ];
 }
 
-function buildQueries(text: string, heuristic: SourceReport, siteProfiles: SiteProfile[]) {
+function buildQueries(
+  text: string,
+  heuristic: SourceReport,
+  siteProfiles: SiteProfile[],
+  auditSources: AuditSource[],
+  detectedLanguage: LyricLanguage,
+) {
   const lines = getSearchableLines(text);
   const queryChunks = buildSearchQueryChunks(text, {
     maxChunkChars: 110,
@@ -162,34 +186,36 @@ function buildQueries(text: string, heuristic: SourceReport, siteProfiles: SiteP
   });
   const fingerprintQuery = queryChunks.map((chunk) => `"${chunk}"`).join(" ");
   const primaryLine = lines[0];
-  const matchingDomains = getMatchingDomains(text, heuristic, siteProfiles).slice(0, 2);
+  const matchingDomains = getMatchingDomains(
+    text,
+    heuristic,
+    siteProfiles,
+    auditSources,
+    detectedLanguage,
+  );
   const queries: string[] = [];
 
-  if (fingerprintQuery && matchingDomains[0]) {
-    queries.push(`site:${matchingDomains[0]} ${fingerprintQuery}`);
-  }
-
-  if (fingerprintQuery && matchingDomains[1]) {
-    queries.push(`site:${matchingDomains[1]} ${fingerprintQuery}`);
+  for (const domain of matchingDomains) {
+    if (fingerprintQuery) {
+      queries.push(`site:${domain} ${fingerprintQuery}`);
+    }
   }
 
   if (fingerprintQuery) {
     queries.push(`${fingerprintQuery} lyrics`);
   }
 
-  if (primaryLine && matchingDomains[0]) {
-    queries.push(`site:${matchingDomains[0]} "${primaryLine}"`);
-  }
-
-  if (primaryLine && matchingDomains[1]) {
-    queries.push(`site:${matchingDomains[1]} "${primaryLine}"`);
+  for (const domain of matchingDomains) {
+    if (primaryLine) {
+      queries.push(`site:${domain} "${primaryLine}"`);
+    }
   }
 
   if (primaryLine) {
     queries.push(`"${primaryLine}" lyrics`);
   }
 
-  return [...new Set(queries)].slice(0, 6);
+  return [...new Set(queries)].filter(Boolean);
 }
 
 function extractGeminiText(candidate: {
@@ -305,7 +331,13 @@ async function searchWithTavily(
   setting: ProviderSetting,
   context: ProviderSearchContext,
 ): Promise<ProviderSearchResult> {
-  const queries = buildQueries(context.text, context.heuristic, context.siteProfiles);
+  const queries = buildQueries(
+    context.text,
+    context.heuristic,
+    context.siteProfiles,
+    context.auditSources,
+    context.detectedLanguage,
+  );
 
   if (queries.length === 0) {
     return {
@@ -317,6 +349,7 @@ async function searchWithTavily(
 
   const collectedEvidence: AuditWebEvidence[] = [];
   const attemptedQueries: string[] = [];
+  const seenUrls = new Set<string>();
 
   for (const query of queries) {
     attemptedQueries.push(query);
@@ -329,17 +362,22 @@ async function searchWithTavily(
         snippet: result.content ?? "",
         title: result.title ?? "Untitled result",
         url: result.url ?? "",
-      }));
+      }))
+      .filter((result) => {
+        if (seenUrls.has(result.url)) {
+          return false;
+        }
+
+        seenUrls.add(result.url);
+        return true;
+      });
 
     collectedEvidence.push(...nextEvidence);
 
-    if (nextEvidence.length > 0) {
-      break;
-    }
   }
 
   return {
-    evidence: collectedEvidence.slice(0, 5),
+    evidence: collectedEvidence.slice(0, 10),
     notes:
       collectedEvidence.length > 0
         ? `Tavily returned ${collectedEvidence.length} matching search result${collectedEvidence.length === 1 ? "" : "s"}.`
@@ -358,9 +396,15 @@ async function searchWithGemini(
     throw new Error("Missing GEMINI_API_KEY");
   }
 
-  const searchableLines = getSearchableLines(context.text);
+  const queries = buildQueries(
+    context.text,
+    context.heuristic,
+    context.siteProfiles,
+    context.auditSources,
+    context.detectedLanguage,
+  );
 
-  if (searchableLines.length === 0) {
+  if (queries.length === 0) {
     return {
       evidence: [],
       notes: "No searchable lyric lines were available for Gemini Search.",
@@ -382,9 +426,11 @@ async function searchWithGemini(
               {
                 text: [
                   "Search the live web for the likely external source of these lyrics.",
+                  `Detected lyric language: ${context.detectedLanguage}.`,
                   "Prioritize exact matches, lyric blogs, and transcription websites.",
-                  "Use the lyric lines below as the strongest clues:",
-                  ...searchableLines.map((line) => `- "${line}"`),
+                  "Search the configured source domains one by one before broadening out.",
+                  "Use these search queries as the strongest clues:",
+                  ...queries.map((query) => `- ${query}`),
                 ].join("\n"),
               },
             ],
@@ -443,7 +489,7 @@ async function searchWithGemini(
   }
 
   const evidence = buildGeminiEvidence(setting.providerId, candidate).slice(0, 5);
-  const queries =
+  const groundedQueries =
     candidate.groundingMetadata?.webSearchQueries?.filter(Boolean) ?? [];
 
   return {
@@ -452,7 +498,7 @@ async function searchWithGemini(
       evidence.length > 0
         ? `Gemini Search grounded the audit against ${evidence.length} Google-backed web result${evidence.length === 1 ? "" : "s"}.`
         : "Gemini Search ran, but it did not return grounded web results for these lyric lines.",
-    queries,
+    queries: groundedQueries,
   };
 }
 
@@ -462,9 +508,11 @@ export async function collectWebEvidence(
   siteProfiles: SiteProfile[],
 ): Promise<WebEvidenceCollection> {
   const inputHash = hashInput(text);
-  const [providerSettings, auditRuns] = await Promise.all([
+  const detectedLanguage = detectLyricLanguage(text);
+  const [providerSettings, auditRuns, auditSources] = await Promise.all([
     listProviderSettings(),
     listAuditRuns(),
+    listAuditSources(),
   ]);
   const cachedRun = getCachedAuditRun(inputHash, auditRuns);
 
@@ -486,7 +534,14 @@ export async function collectWebEvidence(
   const now = Date.now();
   const attemptedProviders: string[] = [];
   const attemptedQueries: string[] = [];
-  const notes: string[] = [];
+  const languageSourceCount = auditSources.filter(
+    (source) =>
+      source.enabled && languageMatchesSource(detectedLanguage, source.language),
+  ).length;
+  const notes: string[] = [
+    `Detected lyric language: ${detectedLanguage}.`,
+    `Configured sources checked for this language: ${languageSourceCount}.`,
+  ];
 
   for (const setting of providerSettings) {
     if (!setting.enabled) {
@@ -524,6 +579,8 @@ export async function collectWebEvidence(
 
     try {
       const result = await provider.search(setting, {
+        auditSources,
+        detectedLanguage,
         heuristic,
         siteProfiles,
         text,
