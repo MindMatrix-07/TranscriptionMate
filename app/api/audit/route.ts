@@ -12,6 +12,7 @@ import { detectSource } from "@/lib/source-detector";
 import {
   appendAuditRun,
   listFeedback,
+  listTrainingLessons,
   listSiteProfiles,
   listTrainingNotes,
 } from "@/lib/training-store";
@@ -78,6 +79,7 @@ type AuditContext = {
   feedback: Awaited<ReturnType<typeof listFeedback>>;
   heuristic: ReturnType<typeof detectSource>;
   siteProfiles: Awaited<ReturnType<typeof listSiteProfiles>>;
+  trainingLessons: Awaited<ReturnType<typeof listTrainingLessons>>;
   trainingNotes: Awaited<ReturnType<typeof listTrainingNotes>>;
   webSearch: Awaited<ReturnType<typeof collectWebEvidence>>;
 };
@@ -234,6 +236,15 @@ async function requestAiAudit(text: string, context: AuditContext) {
       notes: profile.notes,
       searchHint: profile.searchHint,
     })),
+    trainingLessons: context.trainingLessons.slice(0, 30).map((lesson) => ({
+      confidence: lesson.confidence,
+      evidenceSources: lesson.evidenceSources,
+      guidance: lesson.guidance,
+      providerHints: lesson.providerHints,
+      relatedDomains: lesson.relatedDomains,
+      sourceMessage: lesson.sourceMessage,
+      title: lesson.title,
+    })),
     trainingNotes: context.trainingNotes.slice(-20).map((note) => ({
       author: note.author,
       content: note.content,
@@ -356,9 +367,10 @@ export async function POST(request: Request) {
     }
 
     const heuristic = detectSource(text);
-    const [siteProfiles, trainingNotes, feedback] = await Promise.all([
+    const [siteProfiles, trainingNotes, trainingLessons, feedback] = await Promise.all([
       listSiteProfiles(),
       listTrainingNotes(),
+      listTrainingLessons(),
       listFeedback(),
     ]);
     const webSearch = await collectWebEvidence(text, heuristic, siteProfiles);
@@ -366,6 +378,7 @@ export async function POST(request: Request) {
       feedback,
       heuristic,
       siteProfiles,
+      trainingLessons,
       trainingNotes,
       webSearch,
     };

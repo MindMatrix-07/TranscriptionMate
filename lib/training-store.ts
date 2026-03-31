@@ -17,6 +17,17 @@ export type TrainingNote = SharedItem & {
   content: string;
 };
 
+export type TrainingLesson = SharedItem & {
+  confidence: "low" | "medium" | "high";
+  evidenceSources: string[];
+  guidance: string;
+  providerHints: string[];
+  relatedDomains: string[];
+  sourceMessage: string;
+  title: string;
+  updatedAt: string;
+};
+
 export type AuditFeedback = SharedItem & {
   auditRunId?: string | null;
   auditSummary: string;
@@ -67,6 +78,7 @@ const sharedMemoryStore = new Map<string, string>();
 const storageKeys = {
   auditRuns: "trainer:audit-runs",
   feedback: "trainer:feedback",
+  lessons: "trainer:lessons",
   providers: "trainer:providers",
   siteProfiles: "trainer:site-profiles",
   trainingNotes: "trainer:notes",
@@ -177,6 +189,10 @@ export async function listSiteProfiles() {
 
 export async function listTrainingNotes() {
   return readList<TrainingNote>(storageKeys.trainingNotes);
+}
+
+export async function listTrainingLessons() {
+  return readList<TrainingLesson>(storageKeys.lessons);
 }
 
 export async function listFeedback() {
