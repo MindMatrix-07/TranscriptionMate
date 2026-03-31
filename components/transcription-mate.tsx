@@ -184,6 +184,7 @@ export function TranscriptionMate() {
       : sourceReport?.suspicion === "medium"
         ? 60
         : 20);
+  const topAuditCandidateMatch = auditResult?.candidateMatches?.[0] ?? null;
   const suspicionTone =
     sourceReport?.suspicion === "high"
       ? "text-rose-400 bg-rose-500/15"
@@ -629,9 +630,19 @@ export function TranscriptionMate() {
                           {auditResult.rationale}
                         </p>
                       </div>
-                      <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--foreground)]">
-                        {auditResult.mode === "ai" ? "AI mode" : "Fallback mode"}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {topAuditCandidateMatch ? (
+                          <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-medium text-emerald-400">
+                            {topAuditCandidateMatch.exactLineMatches} exact line
+                            {topAuditCandidateMatch.exactLineMatches === 1
+                              ? ""
+                              : "s"}
+                          </span>
+                        ) : null}
+                        <span className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs font-medium text-[var(--foreground)]">
+                          {auditResult.mode === "ai" ? "AI mode" : "Fallback mode"}
+                        </span>
+                      </div>
                     </div>
 
                     <p className="mt-3 text-xs leading-5 text-[var(--muted)]">
@@ -675,6 +686,148 @@ export function TranscriptionMate() {
                           >
                             {artifact}
                           </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {auditResult.candidateMatches &&
+                  auditResult.candidateMatches.length > 0 ? (
+                    <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-strong)] px-4 py-4">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold">Candidate site matches</p>
+                          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+                            The audit fetches the top candidate pages, normalizes
+                            their text, and compares your pasted lyrics line by line.
+                          </p>
+                        </div>
+                        <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                          Top {auditResult.candidateMatches.length} compared
+                        </span>
+                      </div>
+
+                      <div className="mt-4 space-y-3">
+                        {auditResult.candidateMatches.map((candidate, index) => (
+                          <a
+                            key={`${candidate.url}-${candidate.domain}-${index}`}
+                            href={candidate.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`block rounded-2xl border px-4 py-4 text-sm transition hover:border-[var(--accent)] hover:bg-[var(--accent-soft)] ${
+                              index === 0
+                                ? "border-emerald-400/40 bg-emerald-500/10"
+                                : "border-[var(--border)]"
+                            }`}
+                          >
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="font-semibold">{candidate.name}</p>
+                                  {index === 0 ? (
+                                    <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-medium text-emerald-400">
+                                      Best match
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-xs text-[var(--muted)]">
+                                  {candidate.domain}
+                                </p>
+                                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                                  {candidate.title}
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                  Score {candidate.score}
+                                </span>
+                                <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                  {candidate.fetched ? "Full page" : "Snippet fallback"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <span className="rounded-full bg-emerald-500/15 px-3 py-1 text-xs text-emerald-400">
+                                {candidate.exactLineMatches} exact
+                              </span>
+                              <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs text-amber-400">
+                                {candidate.nearLineMatches} near
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.matchedLines}/{candidate.inputLineCount} matched
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.matchPercentage}% coverage
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {candidate.longestConsecutiveBlock}-line block
+                              </span>
+                              <span className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-[var(--muted)]">
+                                {formatProviderName(candidate.providerId)}
+                              </span>
+                            </div>
+
+                            {candidate.sampleMatches.length > 0 ? (
+                              <div className="mt-3 space-y-2">
+                                {candidate.sampleMatches.slice(0, 3).map((match) => (
+                                  <div
+                                    key={`${candidate.url}-${match.inputLine}-${match.candidateLine}`}
+                                    className="rounded-xl border border-[var(--border)] bg-black/10 px-3 py-3"
+                                  >
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <span
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                                          match.type === "exact"
+                                            ? "bg-emerald-500/15 text-emerald-400"
+                                            : "bg-amber-500/15 text-amber-400"
+                                        }`}
+                                      >
+                                        {match.type === "exact" ? "Exact" : "Near"}
+                                      </span>
+                                      <span className="text-[11px] text-[var(--muted)]">
+                                        {(match.similarity * 100).toFixed(0)}% similarity
+                                      </span>
+                                    </div>
+                                    <p className="mt-2 font-mono text-xs leading-5 text-[var(--foreground)]">
+                                      Input: {match.inputLine}
+                                    </p>
+                                    {match.type === "near" ? (
+                                      <p className="mt-1 font-mono text-xs leading-5 text-[var(--muted)]">
+                                        Site: {match.candidateLine}
+                                      </p>
+                                    ) : null}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            {candidate.metadataHits.length > 0 ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {candidate.metadataHits.map((item) => (
+                                  <span
+                                    key={`${candidate.url}-${item}`}
+                                    className="rounded-full bg-[var(--accent-soft)] px-3 py-1 text-xs text-[var(--foreground)]"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+
+                            {candidate.nonLyricSignals.length > 0 ? (
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                {candidate.nonLyricSignals.map((item) => (
+                                  <span
+                                    key={`${candidate.url}-${item}`}
+                                    className="rounded-full bg-rose-500/15 px-3 py-1 text-xs text-rose-400"
+                                  >
+                                    {item}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </a>
                         ))}
                       </div>
                     </div>

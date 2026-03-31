@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import {
+  compareLyricsAgainstWebEvidence,
+  summarizeCandidateMatches,
+} from "@/lib/audit-line-matcher";
+import {
   buildManualSearchLinks,
   type SourceAuditResult,
 } from "@/lib/source-audit";
@@ -76,6 +80,8 @@ const auditSchema = {
 } as const;
 
 type AuditContext = {
+  candidateMatchSummary: ReturnType<typeof summarizeCandidateMatches>;
+  candidateMatches: Awaited<ReturnType<typeof compareLyricsAgainstWebEvidence>>;
   feedback: Awaited<ReturnType<typeof listFeedback>>;
   heuristic: ReturnType<typeof detectSource>;
   siteProfiles: Awaited<ReturnType<typeof listSiteProfiles>>;
@@ -133,9 +139,12 @@ function extractOutputText(payload: unknown) {
 
 function buildFallbackAudit(text: string, context: AuditContext) {
   const topCandidate = context.heuristic.candidates[0];
+  const topLineMatch = context.candidateMatchSummary.topCandidate;
   const evidenceDomain = getLikelyDomainFromEvidence(context.webSearch.webEvidence);
-  const likelySourceDomain = topCandidate?.domain ?? evidenceDomain;
-  const likelySourceName = topCandidate?.name ?? evidenceDomain;
+  const likelySourceDomain =
+    topLineMatch?.domain ?? topCandidate?.domain ?? evidenceDomain;
+  const likelySourceName =
+    topLineMatch?.name ?? topCandidate?.name ?? evidenceDomain;
   const hasEvidence = context.webSearch.webEvidence.length > 0;
   const indicators = [
     ...(topCandidate?.evidence.map((item) => item.clue) ?? []),
@@ -143,14 +152,28 @@ function buildFallbackAudit(text: string, context: AuditContext) {
       .slice(0, 2)
       .map((item) => `Web match: ${item.title}`),
   ];
+
+  if (topLineMatch) {
+    indicators.unshift(
+      `Line matches: ${topLineMatch.matchedLines}/${topLineMatch.inputLineCount}`,
+      `Longest block: ${topLineMatch.longestConsecutiveBlock} line${
+        topLineMatch.longestConsecutiveBlock === 1 ? "" : "s"
+      }`,
+    );
+  }
+
   const confidence =
-    context.heuristic.suspicion === "high"
+    context.candidateMatchSummary.decisive
+      ? "high"
+      : context.heuristic.suspicion === "high"
       ? "high"
       : context.heuristic.suspicion === "medium" || hasEvidence
         ? "medium"
         : "low";
   const spamProbability =
-    context.heuristic.suspicion === "high"
+    context.candidateMatchSummary.decisive
+      ? 92
+      : context.heuristic.suspicion === "high"
       ? 90
       : context.heuristic.suspicion === "medium"
         ? 60
@@ -170,15 +193,25 @@ function buildFallbackAudit(text: string, context: AuditContext) {
     providerChain: context.webSearch.fallbackChain,
     providerConfigured: Boolean(process.env.OPENAI_API_KEY),
     providerId: context.webSearch.providerId,
-    rationale: hasEvidence
-      ? `${context.heuristic.summary} ${context.webSearch.notes}`
-      : context.heuristic.summary,
-    recommendedAction: hasEvidence
+    rationale: [
+      context.candidateMatchSummary.topCandidate
+        ? context.candidateMatchSummary.summary
+        : null,
+      hasEvidence
+        ? `${context.heuristic.summary} ${context.webSearch.notes}`
+        : context.heuristic.summary,
+    ]
+      .filter(Boolean)
+      .join(" "),
+    recommendedAction: context.candidateMatchSummary.topCandidate
+      ? "Review the top matched site and compare the matched lines before accepting this submission."
+      : hasEvidence
       ? "Review the fetched web evidence and compare the exact lyric lines before accepting this submission."
       : topCandidate || context.heuristic.flags.length > 0
         ? "Manually verify the top lyric line before accepting this submission."
         : "No strong external-source clues were found, but a manual spot-check is still wise for public submissions.",
     spamProbability,
+    candidateMatches: context.candidateMatches,
     webEvidence: context.webSearch.webEvidence,
   } satisfies SourceAuditResult;
 }
@@ -224,6 +257,23 @@ async function requestAiAudit(text: string, context: AuditContext) {
       name: candidate.name,
       score: candidate.score,
     })),
+    candidateMatches: context.candidateMatches.map((candidate) => ({
+      comparisonSource: candidate.comparisonSource,
+      domain: candidate.domain,
+      exactLineMatches: candidate.exactLineMatches,
+      longestConsecutiveBlock: candidate.longestConsecutiveBlock,
+      matchPercentage: candidate.matchPercentage,
+      matchedLines: candidate.matchedLines,
+      metadataHits: candidate.metadataHits,
+      name: candidate.name,
+      nearLineMatches: candidate.nearLineMatches,
+      nonLyricSignals: candidate.nonLyricSignals,
+      sampleMatches: candidate.sampleMatches,
+      score: candidate.score,
+      title: candidate.title,
+      url: candidate.url,
+    })),
+    candidateMatchSummary: context.candidateMatchSummary.summary,
     heuristicFlags: context.heuristic.flags,
     heuristicSummary: context.heuristic.summary,
     lyrics: text,
@@ -266,7 +316,7 @@ async function requestAiAudit(text: string, context: AuditContext) {
         {
           role: "system",
           content:
-            "You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Use the supplied site profiles, admin training notes, past incorrect-feedback examples, and fetched web evidence as learned context. Focus on metadata artifacts, site-brand clues, footer remnants, translation labels, digital signatures, and AI-draft language. Be conservative: if the evidence is weak, say so. Output only JSON that matches the provided schema.",
+            "You are a forensic lyrics moderation assistant. Analyze pasted lyrics for copy-paste source fingerprints and likely external origins. Use the supplied site profiles, admin training notes, past incorrect-feedback examples, fetched web evidence, and candidate line-match comparisons as learned context. Prioritize exact line matches, near line matches, and long consecutive matching blocks over generic snippets. If one candidate site clearly wins on line matching, prefer that site. Be conservative when the evidence is weak. Output only JSON that matches the provided schema.",
         },
         {
           role: "user",
@@ -309,19 +359,56 @@ async function requestAiAudit(text: string, context: AuditContext) {
   >;
   const likelySourceDomain =
     parsed.likelySourceDomain ??
+    context.candidateMatchSummary.topCandidate?.domain ??
     context.heuristic.candidates[0]?.domain ??
     getLikelyDomainFromEvidence(context.webSearch.webEvidence);
 
-  return {
+  const baseAudit = {
     ...parsed,
     heuristic: context.heuristic,
     likelySourceDomain,
+    likelySourceName:
+      parsed.likelySourceName ?? context.candidateMatchSummary.topCandidate?.name ?? null,
     manualSearches: buildManualSearchLinks(text, likelySourceDomain),
     mode: "ai",
     providerChain: context.webSearch.fallbackChain,
     providerConfigured: true,
     providerId: context.webSearch.providerId,
+    candidateMatches: context.candidateMatches,
     webEvidence: context.webSearch.webEvidence,
+  } satisfies SourceAuditResult;
+
+  if (!context.candidateMatchSummary.topCandidate) {
+    return baseAudit;
+  }
+
+  const topCandidate = context.candidateMatchSummary.topCandidate;
+  const boostedIndicators = [
+    ...new Set([
+      `Line matches: ${topCandidate.matchedLines}/${topCandidate.inputLineCount}`,
+      `Longest block: ${topCandidate.longestConsecutiveBlock} line${
+        topCandidate.longestConsecutiveBlock === 1 ? "" : "s"
+      }`,
+      ...baseAudit.indicators,
+    ]),
+  ];
+
+  return {
+    ...baseAudit,
+    confidence: context.candidateMatchSummary.decisive
+      ? "high"
+      : baseAudit.confidence,
+    indicators: boostedIndicators,
+    likelySourceDomain: context.candidateMatchSummary.decisive
+      ? topCandidate.domain
+      : baseAudit.likelySourceDomain,
+    likelySourceName: context.candidateMatchSummary.decisive
+      ? topCandidate.name
+      : baseAudit.likelySourceName,
+    rationale: `${context.candidateMatchSummary.summary} ${baseAudit.rationale}`.trim(),
+    spamProbability: context.candidateMatchSummary.decisive
+      ? Math.max(baseAudit.spamProbability, 88)
+      : baseAudit.spamProbability,
   } satisfies SourceAuditResult;
 }
 
@@ -374,7 +461,14 @@ export async function POST(request: Request) {
       listFeedback(),
     ]);
     const webSearch = await collectWebEvidence(text, heuristic, siteProfiles);
+    const candidateMatches = await compareLyricsAgainstWebEvidence(
+      text,
+      webSearch.webEvidence,
+      siteProfiles,
+    );
     const context: AuditContext = {
+      candidateMatchSummary: summarizeCandidateMatches(candidateMatches),
+      candidateMatches,
       feedback,
       heuristic,
       siteProfiles,
