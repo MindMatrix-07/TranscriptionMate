@@ -40,10 +40,17 @@ type SearchProvider = {
   ) => Promise<ProviderSearchResult>;
 };
 
+const defaultGeminiSearchModel =
+  process.env.GEMINI_SEARCH_MODEL ?? "gemini-2.5-flash";
+const geminiApiBaseUrl =
+  "https://generativelanguage.googleapis.com/v1beta/models";
 const tavilySearchUrl = "https://api.tavily.com/search";
 const cachedAuditMaxAgeMs = 1000 * 60 * 60 * 24;
 
 const providers: Record<string, SearchProvider> = {
+  "gemini-search": {
+    search: searchWithGemini,
+  },
   tavily: {
     search: searchWithTavily,
   },
@@ -167,6 +174,78 @@ function buildQueries(text: string, heuristic: SourceReport, siteProfiles: SiteP
   return [...new Set(queries)].slice(0, 3);
 }
 
+function extractGeminiText(candidate: {
+  content?: {
+    parts?: Array<{
+      text?: string;
+    }>;
+  };
+}) {
+  return (
+    candidate.content?.parts
+      ?.map((part) => part.text?.trim())
+      .filter((value): value is string => Boolean(value))
+      .join("\n") ?? ""
+  );
+}
+
+function buildGeminiEvidence(
+  providerId: string,
+  candidate: {
+    content?: {
+      parts?: Array<{
+        text?: string;
+      }>;
+    };
+    groundingMetadata?: {
+      groundingChunks?: Array<{
+        web?: {
+          title?: string;
+          uri?: string;
+        };
+      }>;
+      groundingSupports?: Array<{
+        groundingChunkIndices?: number[];
+        segment?: {
+          text?: string;
+        };
+      }>;
+      webSearchQueries?: string[];
+    };
+  },
+) {
+  const answerText = extractGeminiText(candidate);
+  const chunks = candidate.groundingMetadata?.groundingChunks ?? [];
+  const supports = candidate.groundingMetadata?.groundingSupports ?? [];
+  const evidence: Array<AuditWebEvidence | null> = chunks.map((chunk, index) => {
+    const web = chunk.web;
+
+    if (!web?.uri || !web.title) {
+      return null;
+    }
+
+    const snippet =
+      supports
+        .filter((support) =>
+          support.groundingChunkIndices?.includes(index),
+        )
+        .map((support) => support.segment?.text?.trim())
+        .filter((value): value is string => Boolean(value))
+        .join(" ")
+        .slice(0, 400) || answerText.slice(0, 400);
+
+    return {
+      providerId,
+      score: null,
+      snippet,
+      title: web.title,
+      url: web.uri,
+    };
+  });
+
+  return evidence.filter((item): item is AuditWebEvidence => item !== null);
+}
+
 async function runTavilyQuery(query: string, timeoutMs: number) {
   const apiKey = process.env.TAVILY_API_KEY;
 
@@ -248,6 +327,114 @@ async function searchWithTavily(
         ? `Tavily returned ${collectedEvidence.length} matching search result${collectedEvidence.length === 1 ? "" : "s"}.`
         : "Tavily did not return any matching web evidence for the current lyric lines.",
     queries: attemptedQueries,
+  };
+}
+
+async function searchWithGemini(
+  setting: ProviderSetting,
+  context: ProviderSearchContext,
+): Promise<ProviderSearchResult> {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("Missing GEMINI_API_KEY");
+  }
+
+  const searchableLines = getSearchableLines(context.text);
+
+  if (searchableLines.length === 0) {
+    return {
+      evidence: [],
+      notes: "No searchable lyric lines were available for Gemini Search.",
+      queries: [],
+    };
+  }
+
+  const response = await fetch(
+    `${geminiApiBaseUrl}/${defaultGeminiSearchModel}:generateContent?key=${apiKey}`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: [
+                  "Search the live web for the likely external source of these lyrics.",
+                  "Prioritize exact matches, lyric blogs, and transcription websites.",
+                  "Use the lyric lines below as the strongest clues:",
+                  ...searchableLines.map((line) => `- "${line}"`),
+                ].join("\n"),
+              },
+            ],
+            role: "user",
+          },
+        ],
+        generationConfig: {
+          temperature: 0.1,
+        },
+        tools: [
+          {
+            google_search: {},
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(setting.timeoutMs),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Gemini Search failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{
+          text?: string;
+        }>;
+      };
+      groundingMetadata?: {
+        groundingChunks?: Array<{
+          web?: {
+            title?: string;
+            uri?: string;
+          };
+        }>;
+        groundingSupports?: Array<{
+          groundingChunkIndices?: number[];
+          segment?: {
+            text?: string;
+          };
+        }>;
+        webSearchQueries?: string[];
+      };
+    }>;
+  };
+  const candidate = payload.candidates?.[0];
+
+  if (!candidate) {
+    return {
+      evidence: [],
+      notes: "Gemini Search returned no grounded candidate.",
+      queries: [],
+    };
+  }
+
+  const evidence = buildGeminiEvidence(setting.providerId, candidate).slice(0, 5);
+  const queries =
+    candidate.groundingMetadata?.webSearchQueries?.filter(Boolean) ?? [];
+
+  return {
+    evidence,
+    notes:
+      evidence.length > 0
+        ? `Gemini Search grounded the audit against ${evidence.length} Google-backed web result${evidence.length === 1 ? "" : "s"}.`
+        : "Gemini Search ran, but it did not return grounded web results for these lyric lines.",
+    queries,
   };
 }
 

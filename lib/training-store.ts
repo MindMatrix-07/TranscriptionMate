@@ -86,6 +86,19 @@ const defaultProviders: ProviderSetting[] = [
     timeoutMs: 8000,
     updatedAt: new Date(0).toISOString(),
   },
+  {
+    allowFallback: true,
+    createdAt: new Date(0).toISOString(),
+    dailySoftLimit: 250,
+    enabled: false,
+    id: "provider-default-gemini-search",
+    mode: "always",
+    name: "Gemini Search",
+    priority: 2,
+    providerId: "gemini-search",
+    timeoutMs: 12000,
+    updatedAt: new Date(0).toISOString(),
+  },
 ];
 
 function getRedisConfig() {
@@ -189,9 +202,21 @@ export async function appendFeedback(
 
 export async function listProviderSettings() {
   const stored = await readList<ProviderSetting>(storageKeys.providers);
-  return stored.length > 0
-    ? stored.sort((left, right) => left.priority - right.priority)
-    : defaultProviders;
+  const mergedProviders =
+    stored.length > 0
+      ? [
+          ...stored,
+          ...defaultProviders.filter(
+            (provider) =>
+              !stored.some(
+                (storedProvider) =>
+                  storedProvider.providerId === provider.providerId,
+              ),
+          ),
+        ]
+      : defaultProviders;
+
+  return mergedProviders.sort((left, right) => left.priority - right.priority);
 }
 
 export async function upsertProviderSetting(
